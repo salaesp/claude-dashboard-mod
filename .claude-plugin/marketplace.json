@@ -1,0 +1,14 @@
+{
+  "name": "claude-dashboard-mod",
+  "description": "The dashboard mod for Claude Code",
+  "owner": {
+    "name": "Luis Sala"
+  },
+  "plugins": [
+    {
+      "name": "dashboard",
+      "source": "./",
+      "description": "Dashboard above the prompt: context window, the session's goals with progress, the main loop and its subagents, and what needs you"
+    }
+  ]
+}

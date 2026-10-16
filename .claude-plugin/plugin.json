@@ -1,0 +1,9 @@
+{
+  "name": "dashboard",
+  "version": "0.10.1",
+  "description": "macOS-style dashboard above the prompt: the context window as a segmented capsule, the session's goals with progress bars, the main loop and its subagents with a Clawd pose for each state, and what needs your attention; /dashboard opens the full panel",
+  "author": {
+    "name": "Luis Sala"
+  },
+  "types": "./types/index.d.ts"
+}
