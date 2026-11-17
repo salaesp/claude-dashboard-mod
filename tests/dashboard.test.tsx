@@ -33,7 +33,7 @@ const NOTE = {
   bullets: ['Band draws'],
 }
 
-const world = (on: On) => {
+const world = (on: On, { model = true } = {}) => {
   const clock = mock.clock(on, { now: 1 })
   on('session.usage', async () => ({ value: { context: { breakdown }, cost: { usd: 11.89 } } }) as never)
   on('session.measure', async () => ({ changed: ['context'] }))
@@ -45,7 +45,7 @@ const world = (on: On) => {
     const { Text } = $.ui.resolve(e)
     return <Text dimColor>engine-band</Text>
   })
-  on('model.complete', () => ({ value: { isAnswered: true as const, text: JSON.stringify(NOTE), usage: USAGE } }))
+  if (model) on('model.complete', () => ({ value: { isAnswered: true as const, text: JSON.stringify(NOTE), usage: USAGE } }))
   return clock
 }
 
@@ -297,4 +297,60 @@ test('the full terminal band sits in a rounded frame titled with the mod name; c
   await $.command.run(cmd('compact'))
   const compact = await draw($, 'terminal', tall(false))
   expect(compact).not.toContain('"borderStyle":"round"')
+})
+
+// The process can go on under another session: what one kept must not reach the next.
+const sessions = (on: On) => {
+  const state = { id: 's1', prompts: [] as string[] }
+  on('session.id', () => ({ value: state.id }) as never)
+  on('model.complete', (_$, e) => {
+    state.prompts.push((e as { prompt: string }).prompt)
+    return { value: { isAnswered: true as const, text: JSON.stringify(NOTE), usage: USAGE } }
+  })
+  return state
+}
+
+const turnOn = async ($: Engine, text: string) => {
+  await $.prompt.submit({ text, wait: false, origin: ORIGIN })
+  await $.turn.complete({ answer: 'ok', durationMs: 10, isAborted: false, turnId: 't', reason: 'answer' })
+  await $.command.run(cmd('text'))
+}
+
+test('a /resume drops the goals of the session it leaves', async ($, on) => {
+  world(on, { model: false })
+  const s = sessions(on)
+  on('session.end', (_$, e) => ({ sessionId: e.sessionId }) as never)
+  await ready($)
+  expect((await $.command.run(cmd('text'))).text).toContain('Build the dashboard mod')
+  await $.session.end({ reason: 'resume', sessionId: 's1', resume: {} } as never)
+  s.id = 's2'
+  expect((await $.command.run(cmd('text'))).text).toContain('No goals yet')
+  await turnOn($, 'fix the login bug')
+  const last = s.prompts.at(-1)!
+  expect(last).toContain('Earlier note: none')
+  expect(last).not.toContain('build the dashboard')
+})
+
+test('a session switch the end hook missed still starts the next session clean', async ($, on) => {
+  world(on, { model: false })
+  const s = sessions(on)
+  await ready($)
+  s.id = 's2'
+  await turnOn($, 'fix the login bug')
+  const last = s.prompts.at(-1)!
+  expect(last).toContain('Earlier note: none')
+  expect(last).not.toContain('build the dashboard')
+})
+
+test('a note that lands after the session changed is dropped', async ($, on) => {
+  world(on, { model: false })
+  const s = { id: 's1' }
+  on('session.id', () => ({ value: s.id }) as never)
+  on('model.complete', () => {
+    // The session gives way to another while the model writes the note.
+    s.id = 's2'
+    return { value: { isAnswered: true as const, text: JSON.stringify(NOTE), usage: USAGE } }
+  })
+  await ready($)
+  expect((await $.command.run(cmd('text'))).text).toContain('No goals yet')
 })

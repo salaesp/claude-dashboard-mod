@@ -20,6 +20,8 @@ const agents = atom({ plugin: 'dashboard', key: 'agents' } as const, [] as Agent
 const busy = atom({ plugin: 'dashboard', key: 'busy' } as const, false)
 const paneUp = atom({ plugin: 'dashboard', key: 'paneUp' } as const, false)
 const stopped = atom({ plugin: 'dashboard', key: 'stopped' } as const, false)
+// The session the note, the log and the agents belong to: the process can go on under another.
+const owner = atom({ plugin: 'dashboard', key: 'owner' } as const, null as string | null)
 
 const PANE = { id: 'dashboard', title: 'Dashboard' }
 
@@ -103,8 +105,35 @@ let pending: Promise<void> = Promise.resolve()
 let generation = 0
 let turn = 0
 
+// Drops what one session kept so the next starts clean, and voids a note still being written.
+async function forget($: EngineInterface) {
+  generation += 1
+  turn = 0
+  await update($, note, () => null)
+  await update($, log, () => [])
+  await update($, agents, () => [])
+  await update($, stopped, () => false)
+}
+
+const sessionId = ($: EngineInterface) => $.session.id().catch(() => null)
+
+// Claims the kept state for the session running now. State kept for another session (a /resume,
+// a /clear or a switch the end hook missed) is dropped before anything is added to it.
+async function adopt($: EngineInterface) {
+  const id = await sessionId($)
+  if (!id) return
+  const was = await read($, owner)
+  if (was === id) return
+  if (was !== null) {
+    await forget($)
+    turn = await $.session.turns().catch(() => 0)
+  }
+  await update($, owner, () => id)
+}
+
 async function refreshGoals($: EngineInterface) {
   const mine = ++generation
+  const id = await sessionId($)
   // The turn this note is written after, fixed now: a prompt may land while the model answers.
   const at = turn
   const exchanges = await read($, log)
@@ -120,7 +149,8 @@ async function refreshGoals($: EngineInterface) {
     timeoutMs: 30_000,
   })
   const fresh = r.isAnswered ? parse(r.text, earlier, at) : null
-  if (!fresh || mine !== generation) return
+  // A note written for a session that has since given way to another is dropped.
+  if (!fresh || mine !== generation || (await sessionId($)) !== id) return
   await update($, note, () => fresh)
 
   const before = earlier?.goals.length ?? 0
@@ -272,6 +302,7 @@ export const register: Register = on => {
     const saved = await $.store.get('mode').catch(() => undefined)
     if (saved === 'compact' || saved === 'full') await update($, mode, () => saved)
     turn = await $.session.turns().catch(() => 0)
+    await adopt($).catch(() => undefined)
     const ran = await next(e)
     void refreshContext($).catch(() => {})
     void seedModel($).catch(() => {})
@@ -314,12 +345,10 @@ export const register: Register = on => {
   })
 
   on('session.end', async ($, e, next) => {
-    if (e.reason === 'clear') {
-      generation += 1
-      turn = 0
-      await update($, note, () => null)
-      await update($, log, () => [])
-      await update($, agents, () => [])
+    // A /clear or a /resume: the process goes on under another session, which owns none of this.
+    if (e.reason === 'clear' || e.reason === 'resume') {
+      await forget($)
+      await update($, owner, () => null)
     }
     return next(e)
   })
@@ -353,6 +382,7 @@ export const register: Register = on => {
   on('prompt.submit', async ($, e, next) => {
     const text = e.text.trim()
     if (text && !text.startsWith('/') && e.origin.kind !== 'plugin') {
+      await adopt($).catch(() => undefined)
       await update($, stopped, () => false).catch(() => undefined)
       await update($, log, list => {
         const last = list.at(-1)

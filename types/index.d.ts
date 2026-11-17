@@ -113,6 +113,8 @@ declare module 'claude-code' {
       paneUp: boolean
       // The person interrupted the last turn; cleared by their next prompt.
       stopped: boolean
+      // The session id the note, log and agents were kept for; null before the first claim.
+      owner: string | null
     }
   }
 }
