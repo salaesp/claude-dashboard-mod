@@ -6,7 +6,7 @@ import { fmtEffort, fmtModel, fmtTokens, groupSmall, pushReading, segments, toSn
 import type { Cast, Plan, Pose } from './draw'
 import { DESKTOP_UNITS, MAX_AGENTS, POSES, TERMINAL_UNITS, attention, bandSvg, catColor, compactSvg, fitPlan, foldedLine, mainStatus, paneSvg, wants } from './draw'
 import { clipSymbol, every, parseSprites } from './sprites'
-import { KEEP, SYSTEM, activeGoal, asText, clip, describeTool, parse, toPrompt, verdict } from './goals'
+import { KEEP, SYSTEM, activeGoal, agentExchanges, asText, clip, describeTool, parse, toPrompt, verdict } from './goals'
 
 const snapshot = atom({ plugin: 'dashboard', key: 'snapshot' } as const, null as ContextSnapshot | null)
 const run = atom({ plugin: 'dashboard', key: 'run' } as const, null as RunInfo | null)
@@ -17,6 +17,7 @@ const mode = atom({ plugin: 'dashboard', key: 'mode' } as const, 'full' as DashM
 const isHidden = atom({ plugin: 'dashboard', key: 'isHidden' } as const, false)
 
 const agents = atom({ plugin: 'dashboard', key: 'agents' } as const, [] as AgentRow[])
+const agentNotes = atom({ plugin: 'dashboard', key: 'agentNotes' } as const, {} as Record<string, Note>)
 const busy = atom({ plugin: 'dashboard', key: 'busy' } as const, false)
 const paneUp = atom({ plugin: 'dashboard', key: 'paneUp' } as const, false)
 const stopped = atom({ plugin: 'dashboard', key: 'stopped' } as const, false)
@@ -112,7 +113,45 @@ async function forget($: EngineInterface) {
   await update($, note, () => null)
   await update($, log, () => [])
   await update($, agents, () => [])
+  await update($, agentNotes, () => ({}))
+  lastGoalAt.clear()
   await update($, stopped, () => false)
+}
+
+// --- agent goals: the same cheap model call, over a subagent's own transcript, so the band
+// can show what the agent in view is after and how far along it is.
+
+const inflight = new Set<string>()
+const lastGoalAt = new Map<string, number>()
+const GOAL_EVERY_MS = 25_000
+
+async function refreshAgentGoals($: EngineInterface, agentId: string, force = false) {
+  if (inflight.has(agentId)) return
+  const now = await $.clock.now().catch(() => 0)
+  if (!force && now - (lastGoalAt.get(agentId) ?? -Infinity) < GOAL_EVERY_MS) return
+  inflight.add(agentId)
+  lastGoalAt.set(agentId, now)
+  try {
+    const found = await $.session.messages({ agentId })
+    if ('deny' in found) return
+    const exchanges = agentExchanges(found)
+    if (exchanges.length === 0) return
+    const earlier = (await read($, agentNotes))?.[agentId] ?? null
+    const r = await $.model.complete({
+      model: 'haiku',
+      system: SYSTEM,
+      prompt: toPrompt(earlier, exchanges),
+      maxTokens: 700,
+      effort: 'low',
+      timeoutMs: 30_000,
+    })
+    const fresh = r.isAnswered ? parse(r.text, earlier, 0) : null
+    if (fresh) await update($, agentNotes, m => ({ ...(m ?? {}), [agentId]: fresh }))
+  } catch {
+    // The next step or the agent's end tries again.
+  } finally {
+    inflight.delete(agentId)
+  }
 }
 
 const sessionId = ($: EngineInterface) => $.session.id().catch(() => null)
@@ -233,7 +272,7 @@ function agentLine({ Box, Text }: Kit, team: AgentRow[], max = MAX_AGENTS, main:
             <Text wrap="truncate">
               <Text color={a.status === 'done' ? 'success' : a.status === 'failed' ? 'error' : 'claude'}>{a.status === 'done' ? '✓ ' : a.status === 'failed' ? '✗ ' : '● '}</Text>
               <Text>{a.description || a.type}</Text>
-              <Text color="subtle">{`  ${a.type} · ${fmtModel(a.model)}`}</Text>
+              <Text color="subtle">{`  ${a.type} · ${fmtModel(a.model)}${a.effort ? ` ${a.effort}` : ''}`}</Text>
             </Text>
             {a.status !== 'running' ? (
               <Text wrap="truncate" color="subtle">{`  ${a.status} · ${a.steps} step${a.steps === 1 ? '' : 's'}`}</Text>
@@ -291,6 +330,47 @@ function attentionLines({ Text }: Kit, items: string[]) {
   ))
 }
 
+// What the band shows while an agent's transcript is on screen (opened from the tasks list):
+// that agent's row (type, model, effort, steps, latest action) and its own goals with progress.
+// Null when there is no such agent, or nothing the person wants drawn.
+async function agentView($: EngineInterface, e: { surface: string; props: { bodyColumns?: number; maxRows?: number; isWorking?: boolean; hasSurvey?: boolean } }, viewId: string, inPane = false) {
+  const row = (await read($, agents)).find(a => a.agentId === viewId || a.id === viewId)
+  if (!row) return null
+  if (!inPane) {
+    const isPaneUp = (await read($, paneUp)) && (await $.ui.panes()).some(p => p.id === PANE.id && p.isPlaced)
+    if (e.props.hasSurvey || isPaneUp || (await read($, isHidden))) return null
+  }
+  const n = (await read($, agentNotes))?.[viewId] ?? null
+  // Seeds the note the first time the agent is looked at; the write redraws.
+  if (!n) void refreshAgentGoals($, viewId, true).catch(() => {})
+  const ui = $.ui.resolve(e as never)
+  const isRunning = row.status === 'running'
+  if (e.surface !== 'terminal' && 'Svg' in ui) {
+    const W = Math.max(260, Math.min(inPane ? 1200 : 1600, (e.props.bodyColumns || 100) * 8 - 24))
+    const want = wants(null, n, null, [row], !isRunning)
+    const plan: Plan = fitPlan(want, (inPane ? 40 : Math.max(3, (e.props.maxRows || 12) - 3)) * 20, DESKTOP_UNITS)
+    const d = bandSvg(null, null, n, null, W, !isRunning, [row], cast, { ...plan, agents: 1, headers: true }, null)
+    return <ui.Svg source={d.source} alt={d.alt} />
+  }
+  const kit = ui as Kit
+  const cols = e.props.bodyColumns || 80
+  return (
+    <kit.Box flexDirection="column" borderStyle={inPane ? undefined : 'round'} borderColor="inactive" paddingX={inPane ? 0 : 1}>
+      {!inPane && (
+        <kit.Box position="absolute" top={-1} left={1}>
+          <kit.Text color="subtle">{' agent '}</kit.Text>
+        </kit.Box>
+      )}
+      {n && <kit.Text color="subtle" bold>GOALS</kit.Text>}
+      {n && goalLines(kit, n, cols - 4, true)}
+      {!n && <kit.Text color="subtle">{isRunning ? 'Working out its goals…' : 'No goals recorded for this agent.'}</kit.Text>}
+      <kit.Text color="subtle" bold>AGENT</kit.Text>
+      {agentLine(kit, [row], 1, null)}
+      {n?.now && <kit.Text wrap="truncate" color="subtle">{`  now: ${n.now}`}</kit.Text>}
+    </kit.Box>
+  )
+}
+
 export const register: Register = on => {
   on('session.start', async ($, e, next) => {
     await $.command.register({
@@ -321,6 +401,7 @@ export const register: Register = on => {
       type: e.subagentType,
       description: e.description,
       model: started.model,
+      effort: fmtEffort((e as { effort?: string | number }).effort),
       status: 'running',
       startedAt: at,
       steps: 0,
@@ -357,7 +438,8 @@ export const register: Register = on => {
   on('turn.step', async function* ($, e, next) {
     if (e.agentId !== undefined) {
       const agentId = e.agentId
-      void update($, agents, list => list.map(a => (a.agentId === agentId ? { ...a, steps: a.steps + 1, isThinking: true } : a))).catch(() => {})
+      void update($, agents, list => list.map(a => (a.agentId === agentId ? { ...a, steps: a.steps + 1, isThinking: true, model: e.model || a.model, effort: fmtEffort(e.effort) ?? a.effort } : a))).catch(() => {})
+      void refreshAgentGoals($, agentId).catch(() => {})
     } else {
       const now = { model: e.model, effort: fmtEffort(e.effort) }
       void update($, run, prev => (prev?.model === now.model && prev.effort === now.effort ? prev : now)).catch(() => {})
@@ -433,6 +515,7 @@ export const register: Register = on => {
       await update($, agents, list => list.map(a => (a.agentId === agentId ? { ...a, status, endedAt, isThinking: false } : a)))
       // Off stage once it has shown how it ended.
       $.clock.after(LINGER_MS + 50, () => $.ui.invalidate('ui.render'))
+      void refreshAgentGoals($, agentId, true).catch(() => {})
       return done
     }
     await update($, busy, () => false)
@@ -481,6 +564,20 @@ export const register: Register = on => {
     // Loaded mid-session (a reload) nothing has been measured yet: measure now, the write redraws.
     if (!snap) void refreshContext($).catch(() => {})
     if ((await read($, run)) === null) void seedModel($).catch(() => {})
+    const viewId = (e.props as { view?: { agentId?: string } }).view?.agentId
+    if (viewId) {
+      const mineAgent = await agentView($, e, viewId)
+      if (mineAgent) {
+        const below = await next(e)
+        const ui = $.ui.resolve(e)
+        return (
+          <ui.Box flexDirection="column">
+            {mineAgent}
+            {below}
+          </ui.Box>
+        )
+      }
+    }
     const team = await onStage($)
     // An unload closes the panel without telling its hooks: the engine's record settles it.
     const isPaneUp = (await read($, paneUp)) && (await $.ui.panes()).some(p => p.id === PANE.id && p.isPlaced)
@@ -555,6 +652,11 @@ export const register: Register = on => {
   })
 
   on('ui.render', { component: 'Pane', requestId: PANE.id }, async ($, e) => {
+    const viewId = (e.props as { view?: { agentId?: string } }).view?.agentId
+    if (viewId) {
+      const seen = await agentView($, e, viewId, true)
+      if (seen) return seen
+    }
     const ui = $.ui.resolve(e)
     const snap = await read($, snapshot)
     const n = await read($, note)

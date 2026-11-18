@@ -1,3 +1,4 @@
+import type { SessionMessage } from 'claude-code'
 import type { Exchange, Goal, Note } from '../types'
 
 export const KEEP = 8
@@ -138,4 +139,22 @@ export function asText(note: Note, contextPct: number | null): string {
   const v = verdict(note, contextPct)
   if (v.text) lines.push(v.text)
   return lines.join('\n')
+}
+
+// A subagent's transcript as exchanges for the goal model: the brief it was given, the tools it
+// ran, its latest words. Its "person" is the agent that spawned it.
+export function agentExchanges(messages: readonly SessionMessage[]): Exchange[] {
+  const out: Exchange[] = []
+  for (const m of messages) {
+    if (m.role === 'user') {
+      if (m.text.trim()) out.push({ prompt: m.text.trim(), tools: [], answer: '' })
+      continue
+    }
+    if (out.length === 0) out.push({ prompt: '(brief not available)', tools: [], answer: '' })
+    const last = out[out.length - 1]!
+    for (const t of m.toolUses) last.tools.push(describeTool(t.tool, t.input))
+    last.tools = last.tools.slice(-12)
+    if (m.text.trim()) last.answer = m.text.trim()
+  }
+  return out.slice(-KEEP)
 }

@@ -59,6 +59,8 @@ export type AgentRow = {
   type: string
   description: string
   model: string
+  // How hard it thinks (low…max), from its requests; absent until one names it.
+  effort?: string | null
   status: 'running' | 'done' | 'failed'
   startedAt: number
   // Model requests the subagent has made so far.
@@ -107,6 +109,8 @@ declare module 'claude-code' {
       mode: DashMode
       isHidden: boolean
       agents: AgentRow[]
+      // Goals inferred per subagent (by agentId), kept while the session runs.
+      agentNotes: Record<string, Note>
       // Whether the main loop is mid-turn: from its requests to its answer.
       busy: boolean
       // Whether the /dashboard panel is up: the band steps aside while it is.

@@ -152,6 +152,26 @@ test('an agent that reports its steps gets a real bar; one that does not shows i
   expect(await draw($, 'desktop')).toContain('2/5')
 })
 
+test('with a subagent transcript in view the band shows that agent: model, effort and its own goals', async ($, on) => {
+  world(on, { model: false })
+  on('agent.spawn', () => ({ agentId: 'a3', model: 'claude-haiku-5-5' }) as never)
+  on('session.messages', () => ({ value: [{ role: 'user', text: 'Audit the auth flow', toolUses: [] }, { role: 'assistant', text: 'Reading', toolUses: [] }] }) as never)
+  on('model.complete', () => ({ value: { isAnswered: true as const, text: JSON.stringify({ goals: [{ id: 'g1', title: 'Audit the auth flow', progress: 40, status: 'active' }], active: 'g1', now: 'Reading tokens', waiting: [], bullets: [] }), usage: USAGE } }))
+  await ready($)
+  await $.agent.spawn({ subagentType: 'Explore', description: 'Audit auth', tool_use_id: 't5', prompt: 'x', effort: 'high', provider: { plugin: 'engine', tier: 'core' } } as never)
+  await $.turn.complete({ answer: 'done', durationMs: 10, isAborted: false, turnId: 't5', reason: 'answer', agentId: 'a3' } as never)
+  // The agent's goal note is written off the turn's path.
+  await new Promise(r => setTimeout(r, 100))
+  for (const surface of ['terminal', 'desktop'] as const) {
+    const json = await draw($, surface, { ...(band() as object), view: { agentId: 'a3' } } as never)
+    expect(json).toContain('Audit the auth flow')
+    expect(json).toContain('40%')
+    expect(json).toContain('Haiku 5.5')
+    expect(json).toContain('high')
+    expect(json).not.toContain('Build the dashboard mod')
+  }
+})
+
 test('categories under 4k fold into "others"', () => {
   const snap = { rows: [{ label: 'messages', tokens: 283000, color: 'x' }, { label: 'memory files', tokens: 1000, color: 'x' }, { label: 'mcp tools', tokens: 3000, color: 'x' }, { label: 'agents', tokens: 1000, color: 'x' }], used: 288000, free: 0, buffer: 0, max: 1_000_000, compactsAt: null, mcpServers: [], costUsd: null }
   const g = groupSmall(snap)

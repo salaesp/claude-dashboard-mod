@@ -107,7 +107,7 @@ const shortModel = (id: string) => fmtModel(id).replace(/ 1M$/, '')
 function agentRow(a: AgentRow, cast: Cast, W: number, y: number): string {
   const x = artWidth(cast) + 10
   const model = shortModel(a.model)
-  const meta = `${a.type} · ${model}`
+  const meta = `${a.type} · ${model}${a.effort ? ` ${a.effort}` : ''}`
   const barW = Math.round(Math.min(140, Math.max(80, W * 0.16)))
   const by = y + 24
   let second: string
