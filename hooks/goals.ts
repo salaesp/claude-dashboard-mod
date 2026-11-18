@@ -8,8 +8,10 @@ From the earlier note and the latest exchanges, reply with JSON only, no prose, 
 Rules:
 - goals: every distinct objective the session has pursued so far, in order of appearance. Keep the earlier ids and titles; never renumber, never drop one.
 - A NEW goal is a new objective unrelated to the earlier ones (a different feature, bug, repo or topic). A sub-step, a fix, a follow-up question or a retry of the same objective is NOT a new goal. Be conservative: most sessions have one goal.
-- progress: 0 = just stated, 100 = finished and confirmed (shipped, merged, the person said it is done). Move it with evidence; it may go down when the person reopens the work.
-- status: "done" at 100 or when the person moved on after finishing; "parked" when they set it aside unfinished; else "active".
+- progress: 0 = just stated, 100 = finished. Move it with evidence; it may go down when the person reopens the work.
+- A goal is finished (progress 100, status "done") when Claude Code delivered what was asked (the change is made, the question answered, the fix in place) and the person accepted it, thanked, said it works, or moved on without asking for more on it. Do not wait for a merge or an explicit "done": accepting and moving on is enough.
+- When the person starts a new goal, settle the earlier active one: "done" at 100 if its work was delivered, else "parked" with its progress.
+- status: "done" (always with progress 100), "parked" when set aside unfinished, else "active". progress 100 is always "done".
 - active: the id the latest exchanges worked on.
 - now: what Claude Code just did or is doing, under 20 words.
 - waiting: the things waiting on the person's attention right now (a question to answer, a decision, a command to run, something to check), 0 to 3 items, each an imperative phrase under 12 words; [] when nothing waits. Drop an item once the person has handled it.
@@ -77,11 +79,13 @@ export function parse(text: string, earlier: Note | null, turn: number): Note | 
     n += 1
     const id = str(rg.id) || `g${n}`
     const was = before.get(id)
-    const status = (['active', 'done', 'parked'] as const).find(s => s === str(rg.status)) ?? 'active'
+    const progress = pct(rg.progress)
+    // 100% and "done" are one state: whichever the reply gives, the goal is finished.
+    const status = progress === 100 ? 'done' : (['active', 'done', 'parked'] as const).find(s => s === str(rg.status)) ?? 'active'
     goals.push({
       id,
       title: was?.title ?? title,
-      progress: status === 'done' ? 100 : pct(rg.progress),
+      progress: status === 'done' ? 100 : progress,
       status,
       firstTurn: was?.firstTurn ?? turn,
       turns: was?.turns ?? 0,

@@ -3,6 +3,8 @@ import { expect, mock, test } from 'claude-code/testing'
 import type { Engine } from 'claude-code/testing'
 
 import { groupSmall } from '../hooks/context'
+import { TERMINAL_UNITS, fitPlan } from '../hooks/draw'
+import { parse } from '../hooks/goals'
 
 const USAGE = { input_tokens: 10, output_tokens: 10, cache_creation_input_tokens: 0, cache_read_input_tokens: 0 }
 const ORIGIN = { kind: 'composer' } as const
@@ -353,4 +355,20 @@ test('a note that lands after the session changed is dropped', async ($, on) => 
   })
   await ready($)
   expect((await $.command.run(cmd('text'))).text).toContain('No goals yet')
+})
+
+test('a goal at 100% is done whatever status the reply gives, and done is always 100%', async () => {
+  const n = parse(JSON.stringify({ goals: [
+    { id: 'g1', title: 'Ship it', progress: 100, status: 'active' },
+    { id: 'g2', title: 'Next', progress: 40, status: 'done' },
+    { id: 'g3', title: 'Later', progress: 30, status: 'active' },
+  ], active: 'g3' }), null, 1)!
+  expect(n.goals.map(g => [g.status, g.progress])).toEqual([['done', 100], ['done', 100], ['active', 30]])
+})
+
+test('a short band keeps the finished goals line over the main loop row', async () => {
+  const want = { hasContext: true, goals: 1, folded: true, main: true, agents: 0, needs: 0 }
+  const p = fitPlan(want, 3, TERMINAL_UNITS)
+  expect(p.folded).toBe(true)
+  expect(p.main).toBe(false)
 })

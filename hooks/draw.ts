@@ -288,8 +288,8 @@ export type Units = { context: number; legend: number; header: number; goal: num
 export const DESKTOP_UNITS: Units = { context: 26, legend: 26, header: 22, goal: 26, note: 22, agent: 38, need: 24 }
 export const TERMINAL_UNITS: Units = { context: 1, legend: 1, header: 1, goal: 1, note: 1, agent: 2, need: 1 }
 
-// Drops what matters least until the band fits `budget`: the legend, the section titles, the
-// folded goals line, then all but one goal, the main loop's row, all but one agent and one need,
+// Drops what matters least until the band fits `budget`: the legend, the section titles, all but
+// one goal, the main loop's row, the folded goals line (the finished ones), all but one agent and one need,
 // then the agents to a count. The context row always stays.
 export function fitPlan(want: { hasContext: boolean; goals: number; folded: boolean; main: boolean; agents: number; needs: number }, budget: number, u: Units): Plan {
   const p: Plan = { legend: want.hasContext, headers: true, goals: want.goals, folded: want.folded, main: want.main, agents: want.agents, needs: want.needs }
@@ -301,9 +301,9 @@ export function fitPlan(want: { hasContext: boolean; goals: number; folded: bool
   const steps: (() => void)[] = [
     () => { p.legend = false },
     () => { p.headers = false },
-    () => { p.folded = false },
     () => { p.goals = Math.min(p.goals, 1) },
     () => { p.main = false },
+    () => { p.folded = false },
     () => { p.agents = Math.min(p.agents, 1) },
     () => { p.needs = Math.min(p.needs, 1) },
     () => { p.agents = 0 },
